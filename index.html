@@ -472,12 +472,33 @@ class BaseModel:
         if errors:
             raise ValidationError(errors)
 
-    def dict(self):
-        return {n: getattr(self, n) for n in _hints(type(self))}
-    model_dump = dict
+    def model_dump(self, **_):
+        def conv(v):
+            if isinstance(v, BaseModel):
+                return v.model_dump()
+            if isinstance(v, (list, tuple)):
+                return [conv(x) for x in v]
+            if isinstance(v, dict):
+                return {k: conv(x) for k, x in v.items()}
+            return v
+        return {n: conv(getattr(self, n)) for n in _hints(type(self))}
+    dict = model_dump   # pydantic v1 name, still works (deprecated)
+
+    def model_dump_json(self, **_):
+        return json.dumps(self.model_dump(), separators=(",", ":"))   # compact, like pydantic
+
+    @classmethod
+    def model_validate(cls, obj):
+        return cls(**obj) if isinstance(obj, dict) else obj
+
+    def model_copy(self, *, update=None):
+        return type(self)(**{**self.model_dump(), **(update or {})})
+
+    def __eq__(self, other):
+        return type(self) is type(other) and self.model_dump() == other.model_dump()
 
     def __repr__(self):
-        inner = ", ".join("%s=%r" % (k, v) for k, v in self.dict().items())
+        inner = ", ".join("%s=%r" % (n, getattr(self, n)) for n in _hints(type(self)))
         return "%s(%s)" % (type(self).__name__, inner)
 
 class _Depends:
@@ -975,7 +996,7 @@ init().then(start,start);
 /* ============================================================
    SYNTAX HIGHLIGHTER
    ============================================================ */
-const HL = /(#[^\n]*)|(f?"""[\s\S]*?"""|f?'''[\s\S]*?'''|f?"(?:\\.|[^"\\])*"|f?'(?:\\.|[^'\\])*')|(@[A-Za-z_][\w.]*)|\b(def|return|if|elif|else|for|while|in|not|and|or|import|from|as|class|try|except|finally|with|lambda|pass|break|continue|None|True|False|async|await|yield|raise|global|del|assert|is)\b|\b(\d+\.?\d*)\b|\b([A-Za-z_]\w*)(?=\s*\()|([+\-*\/%=<>!&|^~:.,;{}\[\]()]+)/g;
+const HL = /(#[^\n]*)|([ft]?"""[\s\S]*?"""|[ft]?'''[\s\S]*?'''|[ft]?"(?:\\.|[^"\\])*"|[ft]?'(?:\\.|[^'\\])*')|(@[A-Za-z_][\w.]*)|\b(def|return|if|elif|else|for|while|in|not|and|or|import|from|as|class|try|except|finally|with|lambda|pass|break|continue|None|True|False|async|await|yield|raise|global|del|assert|is)\b|\b(\d+\.?\d*)\b|\b([A-Za-z_]\w*)(?=\s*\()|([+\-*\/%=<>!&|^~:.,;{}\[\]()]+)/g;
 
 function esc(s){
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -1547,21 +1568,21 @@ import random as rnd
 print(math.sqrt(16))
 print(math.pi)
 
-print(datetime.now().year)
+print(datetime(2024, 3, 15).year)
 
-print(rnd.randint(1, 6))`,
+print(rnd.Random(1).randint(1, 6))`,
     notes:[
       [0,'The whole module is now available under the name `math`.'],
       [1,'Only the `datetime` class is imported, straight into your namespace.'],
       [2,'`as rnd` renames it — you now write rnd.randint instead of random.randint.'],
       [4,'Reach into the module with a dot.'],
-      [7,'Chained calls: datetime.now() gives the current time, .year pulls the year.'],
-      [9,'A random whole number between 1 and 6 (inclusive).']
+      [7,'Chained calls: build a date, then .year pulls the year out. (datetime.now() would give the current moment instead.)'],
+      [9,'A random whole number from 1 to 6. Random(1) is seeded, so you get the same number every run.']
     ],
     output:`4.0
 3.141592653589793
 2024
-5`,
+2`,
     exercise:{
       prompt:'Import the <code>math</code> module and print <code>math.sqrt(81)</code>.',
       checks:[
@@ -1737,44 +1758,54 @@ def health_check():
   },
 
   {
-    id:'fa-uvicorn', title:'Running the server with uvicorn',
+    id:'fa-uvicorn', title:'Running the server (fastapi dev & uvicorn)',
     goal:'Install FastAPI and start your app on a real port.',
-    intro:`<p>FastAPI is the framework; <b>uvicorn</b> is the server that actually runs it. You need both.</p>
-    <p>Install them once in your terminal, then start the server with the <code>uvicorn</code> command.</p>
-    <p>The magic string <code>main:app</code> means: <b>file</b> <code>main.py</code> → <b>variable</b> <code>app</code>.</p>`,
+    intro:`<p>FastAPI is the framework; <b>uvicorn</b> is the server that actually runs it. Installing <code>fastapi[standard]</code> gives you both, plus the handy <code>fastapi</code> command.</p>
+    <p>Start the development server with <code>fastapi dev main.py</code>. The classic <code>uvicorn main:app --reload</code> does the same job and is what you will see in older tutorials and in production.</p>
+    <p>With uvicorn, the string <code>main:app</code> means: <b>file</b> <code>main.py</code> → <b>variable</b> <code>app</code>. FastAPI 0.142 needs <b>Python 3.10 or newer</b>.</p>`,
     symbols:[
       ['pip install','Downloads packages from PyPI. Run it once.'],
-      ['main:app','"main.py" colon "the app variable inside it".'],
+      ['fastapi[standard]','FastAPI plus uvicorn and other everyday extras, in one install.'],
+      ['fastapi dev','FastAPI\'s own command: starts the dev server and reloads when you save.'],
+      ['main:app','"main.py" colon "the app variable inside it" (for the uvicorn command).'],
       ['--reload','Restarts the server automatically whenever you save a file. Great for development.'],
       ['--host 0.0.0.0','Makes the server reachable from other machines (useful in Docker).'],
       ['/docs','Free interactive API documentation FastAPI generates for you.']
     ],
-    code:`# 1. In your terminal, install the packages:
-pip install fastapi uvicorn
+    code:`# 0. FastAPI needs Python 3.10 or newer:
+python --version
 
-# 2. Make sure main.py is in the current folder, then run:
+# 1. In your terminal, install FastAPI with its recommended extras (includes uvicorn):
+pip install "fastapi[standard]"
+
+# 2. With main.py in the current folder, start the dev server:
+fastapi dev main.py
+
+# 3. The classic way still works too:
 uvicorn main:app --reload
 
-# 3. Open these in your browser:
+# 4. Open these in your browser:
 #    http://127.0.0.1:8000        -> your API
 #    http://127.0.0.1:8000/docs   -> automatic interactive docs`,
     notes:[
-      [1,'One command installs both packages.'],
-      [4,'main = main.py, app = the FastAPI() variable. --reload watches your files.'],
-      [7,'The root route you defined.'],
-      [8,'FastAPI writes Swagger documentation for you. Click "Try it out" to test your API.']
+      [1,'FastAPI 0.142 needs Python 3.10 or newer. Check before installing.'],
+      [4,'The [standard] extra installs uvicorn, the fastapi command and other everyday tools in one go.'],
+      [7,'fastapi dev runs your app with auto-reload. It finds the app variable in main.py for you.'],
+      [10,'Plain uvicorn works the same way: main = main.py, app = the FastAPI() variable.'],
+      [13,'The root route you defined.'],
+      [14,'FastAPI writes Swagger documentation for you. Click "Try it out" to test your API.']
     ],
     output:`INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 INFO:     Started reloader process [12345]
 INFO:     Application startup complete.`,
     exercise:{
-      prompt:'Type the terminal command that starts <code>main.py</code> in development mode with auto-reload. (You do not need the pip install line.)',
+      prompt:'Type the terminal command that starts <code>main.py</code> in development mode with auto-reload. The modern <code>fastapi</code> command or plain <code>uvicorn</code> both count.',
       checks:[
-        [/uvicorn\s+main\s*:\s*app/,'Use: uvicorn main:app — the colon separates the file from the variable.'],
-        [/--reload/,'Add the --reload flag at the end.']
+        [/fastapi\s+dev\s+main\.py|uvicorn\s+main\s*:\s*app/,'Use: fastapi dev main.py (or uvicorn main:app).'],
+        [/fastapi\s+dev|--reload/,'Development mode means auto-reload: use fastapi dev, or add --reload to uvicorn.']
       ],
-      hint:'uvicorn main:app --reload — no .py extension, and a colon (not a dot) between main and app.',
-      solution:'uvicorn main:app --reload',
+      hint:'Modern way: fastapi dev main.py. Classic way: uvicorn main:app --reload (a colon, not a dot, between main and app).',
+      solution:'fastapi dev main.py\n# or, the classic way:\n# uvicorn main:app --reload',
       output:`INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 INFO:     Application startup complete.`
     }
@@ -2348,7 +2379,7 @@ source .venv/bin/activate        # macOS / Linux
 .venv\\Scripts\\activate           # Windows
 
 # 3. install packages into it
-pip install fastapi uvicorn
+pip install "fastapi[standard]"
 
 # 4. save the exact versions
 pip freeze > requirements.txt`,
@@ -2545,6 +2576,144 @@ INFO:     Uvicorn running on http://0.0.0.0:8000`,
 `CMD ["uvicorn", "main:app", "--host", "0.0.0.0"]`,`(container starts the API on port 8000)`)
 ]};
 COURSE.splice(6,0,M8);   /* after Advanced FastAPI */
+const M9={id:'m9',title:"What's New in Python 3.14",icon:'🆕',lessons:[
+mk('py314-tstring','Template strings (t-strings)','Build text from pieces without gluing untrusted values in blindly.',
+`<p>An <b>f-string</b> mixes values into text and hands you the finished string. That is risky when a value comes from a user: it might contain HTML or SQL that should never be trusted.</p><p>Python 3.14 adds <b>t-strings</b>. They look like f-strings with a <code>t</code> in front, but they do <i>not</i> join anything. You get a <code>Template</code> that keeps the fixed text and the values <b>separate</b>, so your own code decides how to combine them safely.</p>`,
+[['t"..."','A template string: like an f-string, but it gives you a Template object instead of a finished string.'],['{name}','An interpolation slot. Its value is kept apart from the text.'],['Template','What a t-string creates. You can loop over it.'],['Interpolation','One filled slot. It has .value, .expression, .conversion and .format_spec.']],
+`from string.templatelib import Template, Interpolation
+
+name = "<b>Ada</b>"
+tpl = t"Hello, {name}!"
+
+print(type(tpl).__name__)
+print(tpl.strings)
+print(tpl.interpolations[0].value)
+
+def render(template):
+    parts = []
+    for item in template:
+        if isinstance(item, Interpolation):
+            parts.append(str(item.value).replace("<", "&lt;").replace(">", "&gt;"))
+        else:
+            parts.append(item)
+    return "".join(parts)
+
+print(render(tpl))`,
+[[0,'Template and Interpolation live in the new string.templatelib module.'],[3,'The t before the quote makes a Template, not a str. Nothing is joined yet.'],[6,'The fixed text pieces, kept separate.'],[7,'The values from the {braces}, kept separate too.'],[11,'Looping gives text pieces and Interpolation objects, in order.'],[13,'Only the user-supplied value is escaped. The author\'s own text is left alone.'],[18,'The < and > in the value are now harmless.']],
+`Template
+('Hello, ', '!')
+<b>Ada</b>
+Hello, &lt;b&gt;Ada&lt;/b&gt;!`,
+`Make <code>user = "Bo"</code>, build the template <code>t"Hi {user}"</code> in a variable called <code>tpl</code>, then print <code>tpl.interpolations[0].value</code>.`,
+[[/\buser\s*=\s*["']Bo["']/,`Start with: user = "Bo"`],[/tpl\s*=\s*t"[^"]*\{user\}[^"]*"/,`Build it with: tpl = t"Hi {user}" (a t before the quote).`],[/print\s*\(\s*tpl\.interpolations\[0\]\.value\s*\)/,`Then print(tpl.interpolations[0].value).`]],
+`interpolations is a tuple of the filled slots. [0] is the first one, and .value is what was inside the braces.`,
+`user = "Bo"\ntpl = t"Hi {user}"\nprint(tpl.interpolations[0].value)`,`Bo`),
+
+mk('py314-annotations','Annotations that can look ahead','Use a class in its own type hints, with no quotes needed.',
+`<p>A <b>type hint</b> (annotation) says what kind of value a parameter or return should be. Until now, naming a class <i>inside its own body</i> crashed with <code>NameError</code>, so people wrote the name in quotes.</p><p>In Python 3.14, annotations are <b>evaluated lazily</b>: Python saves them and only works them out when someone asks. By then the class exists, so quotes are not needed. Read them with the new <code>annotationlib.get_annotations()</code>.</p>`,
+[['parent: Node | None','A hint that refers to a class that is still being defined.'],['-> Node','The return type hint.'],['__annotations__','Where hints are stored. In 3.14 it is filled in on first access.'],['annotationlib','New module for reading annotations safely.']],
+`from annotationlib import get_annotations
+
+class Node:
+    def __init__(self, value: int, parent: Node | None = None):
+        self.value = value
+        self.parent = parent
+
+def link(child: Node, parent: Node) -> Node:
+    child.parent = parent
+    return child
+
+print([t.__name__ for t in Node.__init__.__annotations__["parent"].__args__])
+print({k: v.__name__ for k, v in get_annotations(link).items()})`,
+[[3,'Node is used as a type inside its own class, with no quotes. Before 3.14 this crashed with NameError.'],[7,'Hints are no longer evaluated when the def runs. They are saved and worked out only when asked for.'],[11,'Asking now: Node exists by this point. Node | None is a union of two types.'],[12,'annotationlib.get_annotations() is the supported way to read hints in 3.14.']],
+`['Node', 'NoneType']
+{'child': 'Node', 'parent': 'Node', 'return': 'Node'}`,
+`Write a class <code>Tree</code> with a method <code>add(self, child: Tree) -> Tree</code> that returns <code>child</code> (no quotes around Tree). Then print <code>Tree.add.__annotations__["child"].__name__</code>.`,
+[[/class\s+Tree\b/,`Create class Tree.`],[/child\s*:\s*Tree\b/,`Hint the parameter as child: Tree, with no quotes around Tree.`],[/print\s*\(\s*Tree\.add\.__annotations__\[\s*["']child["']\s*\]\.__name__\s*\)/,`Print Tree.add.__annotations__["child"].__name__.`]],
+`Write the hint straight: child: Tree. Python 3.14 waits until you ask before looking up Tree.`,
+`class Tree:\n    def add(self, child: Tree) -> Tree:\n        return child\n\nprint(Tree.add.__annotations__["child"].__name__)`,`Tree`),
+
+mk('py314-except','Cleaner except, safer finally','Drop the brackets around exception types, and learn why return inside finally is now flagged.',
+`<p>Catching two kinds of error used to need brackets: <code>except (ValueError, TypeError):</code>. Python 3.14 lets you write <code>except ValueError, TypeError:</code>. (If you also write <code>as name</code>, keep the brackets.)</p><p>3.14 also warns when you put <code>return</code>, <code>break</code> or <code>continue</code> inside a <code>finally</code> block. They silently swallow exceptions and hide real bugs. The warning appears while Python <i>reads</i> your code, so we use <code>compile()</code> to see it without running anything.</p>`,
+[['except A, B:','Catch several exception types without brackets (3.14+).'],['finally','Runs no matter what. Avoid return, break and continue inside it.'],['SyntaxWarning','A warning raised while Python reads your code, not while it runs.'],['compile()','Reads code without running it.']],
+`import warnings
+
+def parse(text):
+    try:
+        return int(text)
+    except ValueError, TypeError:
+        return -1
+
+print(parse("42"))
+print(parse("abc"))
+print(parse(None))
+
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    compile("def f():\\n    try:\\n        pass\\n    finally:\\n        return 1\\n", "<demo>", "exec")
+
+print(caught[0].category.__name__)
+print(caught[0].message)`,
+[[5,'3.14 lets you list exception types without brackets. Older versions needed except (ValueError, TypeError):.'],[9,'A normal number: no error.'],[10,'int("abc") raises ValueError, caught.'],[11,'int(None) raises TypeError, caught by the same line.'],[14,'compile() reads the code without running it. A return inside finally is now flagged.'],[17,'The kind of warning.'],[18,'What it says. Swallowed exceptions are why this is risky.']],
+`42
+-1
+-1
+SyntaxWarning
+'return' in a 'finally' block`,
+`Write <code>safe_div(a, b)</code> that returns <code>a / b</code>, but <code>-1.0</code> on <code>ZeroDivisionError</code> or <code>TypeError</code> (use the new bracket-free syntax). Print <code>safe_div(1, 0)</code>.`,
+[[/def\s+safe_div\s*\(\s*a\s*,\s*b\s*\)/,`Define safe_div(a, b).`],[/except\s+ZeroDivisionError\s*,\s*TypeError\s*:/,`Write: except ZeroDivisionError, TypeError:  (no brackets, no "as").`],[/print\s*\(\s*safe_div\s*\(\s*1\s*,\s*0\s*\)\s*\)/,`Print safe_div(1, 0).`]],
+`Inside try: return a / b. Inside the except: return -1.0.`,
+`def safe_div(a, b):\n    try:\n        return a / b\n    except ZeroDivisionError, TypeError:\n        return -1.0\n\nprint(safe_div(1, 0))`,`-1.0`),
+
+mk('py314-errors','Clearer syntax error messages','Python now explains more mistakes in plain words.',
+`<p>A <b>SyntaxError</b> means Python could not understand your code at all. Python 3.14 explains more of these in plain words instead of just saying "invalid syntax".</p><p>We feed broken code to <code>compile()</code> and read the explanation from <code>e.msg</code>. Reading error messages calmly is the fastest way to get better at programming.</p>`,
+[['SyntaxError','Raised when code is not valid Python.'],['e.msg','The human-readable explanation inside the error.'],['try / except','Catch the error instead of crashing.'],['compile(src, name, "exec")','Check source code without running it.']],
+`bad_code = [
+    "if x:\\n    pass\\nelse:\\n    pass\\nelif y:\\n    pass",
+    "a = 1 if True",
+]
+
+for src in bad_code:
+    try:
+        compile(src, "<demo>", "exec")
+    except SyntaxError as e:
+        print(e.msg)`,
+[[0,'Two broken snippets, kept as text so they do not break this program.'],[1,'An elif placed after an else. That is never allowed.'],[2,'A one-line if with the else part missing.'],[7,'compile() checks the snippet without running it.'],[8,'Catch the SyntaxError and name it e.'],[9,'e.msg is the explanation. Read it: it usually tells you the fix.']],
+`'elif' block follows an 'else' block
+expected 'else' after 'if' expression`,
+`Use <code>compile()</code> inside <code>try</code>/<code>except SyntaxError as e</code> to check the broken line <code>"x = 5 if True"</code> (use the name <code>"&lt;demo&gt;"</code> and mode <code>"exec"</code>), and print <code>e.msg</code>.`,
+[[/compile\s*\(/,`Call compile(...) on the broken line.`],[/except\s+SyntaxError\s+as\s+e/,`Catch it with: except SyntaxError as e:`],[/print\s*\(\s*e\.msg\s*\)/,`Print e.msg.`]],
+`try: compile("x = 5 if True", "<demo>", "exec")  then  except SyntaxError as e: print(e.msg)`,
+`try:\n    compile("x = 5 if True", "<demo>", "exec")\nexcept SyntaxError as e:\n    print(e.msg)`,`expected 'else' after 'if' expression`),
+
+mk('py314-tools','Handy new tools','Strict map, partial with Placeholder, and time-ordered IDs.',
+`<p>Three small additions that save real work. <code>map(..., strict=True)</code> raises an error when the inputs have different lengths instead of silently stopping early. <code>functools.Placeholder</code> lets <code>partial()</code> freeze arguments that are <i>not</i> the first ones. <code>uuid.uuid7()</code> makes unique IDs that sort by creation time, ideal for database keys.</p><p>Other 3.14 changes, like <code>compression.zstd</code>, free-threaded builds and the new REPL colours, need a real computer, so they are not runnable in this browser engine.</p>`,
+[['map(..., strict=True)','Error if the iterables are different lengths.'],['Placeholder','Marks a slot that partial() fills in at call time.'],['partial(f, ...)','Pre-fills some arguments of a function.'],['uuid.uuid7()','A unique ID that sorts by time (3.14+).']],
+`import uuid
+from functools import partial, Placeholder
+
+names = ["Ada", "Alan", "Grace"]
+ages = [36, 41]
+
+try:
+    list(map(lambda n, a: (n, a), names, ages, strict=True))
+except ValueError as e:
+    print("strict map says:", e)
+
+greet = partial(print, Placeholder, "is learning Python 3.14")
+greet("Bo")
+
+print(uuid.uuid7().version)`,
+[[7,'strict=True makes map() complain about unequal lengths instead of quietly stopping at the shortest.'],[9,'Python tells you which input ran out first.'],[11,'Placeholder reserves a slot. partial can now freeze arguments that are not the first ones.'],[12,'"Bo" lands in the Placeholder slot, before the frozen text.'],[14,'Version 7 UUIDs start with a timestamp, so they sort in creation order.']],
+`strict map says: map() argument 2 is shorter than argument 1
+Bo is learning Python 3.14
+7`,
+`Use <code>map(pow, ...)</code> with <code>strict=True</code> to raise each number in <code>[2, 3]</code> to the power of the matching number in <code>[2, 3]</code>, and print the result as a list.`,
+[[/map\s*\(\s*pow\s*,/,`Start with map(pow, ...).`],[/strict\s*=\s*True/,`Add strict=True.`],[/print\s*\(\s*list\s*\(/,`Wrap it: print(list(map(...))).`]],
+`print(list(map(pow, [2, 3], [2, 3], strict=True)))  gives [4, 27] because 2**2 and 3**3.`,
+`print(list(map(pow, [2, 3], [2, 3], strict=True)))`,`[4, 27]`)
+]};
+COURSE.splice(COURSE.findIndex(m=>m.id==='m6')+1,0,M9);   /* after Python Power-Ups */
 
 const FLAT = [];
 COURSE.forEach(m => m.lessons.forEach(l => FLAT.push({ module:m, lesson:l })));
